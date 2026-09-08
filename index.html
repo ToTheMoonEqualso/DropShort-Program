@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOM Production Risk & Hierarchy View</title>
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --text-main: #111827;
+            --text-sub: #6b7280;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: #ffffff;
+            color: var(--text-main);
+            margin: 0;
+            padding: 24px 16px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .section-title {
+            font-size: 15px;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 16px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 24px;
+            margin-bottom: 28px;
+            align-items: center;
+        }
+
+        .metric-card {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .metric-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+
+        .icon-red { background: #fee2e2; color: #dc2626; }
+        .icon-amber { background: #fef3c7; color: #d97706; }
+        .icon-green { background: #dcfce7; color: #16a34a; }
+
+        .metric-info h2 {
+            margin: 0;
+            font-size: 1.75rem;
+            font-weight: 600;
+            line-height: 1.1;
+            color: var(--text-main);
+        }
+
+        .metric-info p {
+            margin: 2px 0 0 0;
+            color: var(--text-sub);
+            font-size: 0.85rem;
+            font-weight: 400;
+        }
+
+        .filter-section { margin-bottom: 20px; }
+
+        .filter-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: #4b5563;
+            margin-bottom: 10px;
+        }
+
+        .pill-container {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .pill-btn {
+            background: #ffffff;
+            border: 1px solid #d1d5db;
+            color: #374151;
+            padding: 6px 18px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+
+        .pill-btn:hover {
+            border-color: #9ca3af;
+            background: #f9fafb;
+        }
+
+        .pill-btn.active {
+            background: #111827;
+            color: #ffffff;
+            border-color: #111827;
+        }
+
+        .pill-btn-danger {
+            border-color: #fca5a5 !important;
+            color: #dc2626 !important;
+            background-color: #fef2f2 !important;
+        }
+
+        .pill-btn-danger.active {
+            background: #dc2626 !important;
+            color: #ffffff !important;
+            border-color: #dc2626 !important;
+        }
+
+        .highlight-card {
+            background: #f9fafb;
+            border: 1px solid #3b82f6;
+            border-radius: 12px;
+            padding: 14px 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+        }
+
+        .highlight-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tag-urgent {
+            background: #fee2e2;
+            color: #dc2626;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 3px 10px;
+            border-radius: 12px;
+            text-transform: lowercase;
+        }
+
+        .highlight-title {
+            font-weight: 600;
+            font-size: 14px;
+            color: var(--text-main);
+        }
+
+        .highlight-sub {
+            font-size: 12px;
+            color: var(--text-sub);
+            margin-top: 1px;
+        }
+
+        .tag-category {
+            background: #e0f2fe;
+            color: #0369a1;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 10px;
+        }
+
+        .bom-table-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #475569;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .header-left {
+            flex: 1;
+            padding-left: 24px;
+        }
+
+        .header-right {
+            display: grid;
+            grid-template-columns: 80px 120px 120px 150px;
+            gap: 10px;
+            text-align: center;
+        }
+
+        .bom-container {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+
+        .bom-header-wrapper { margin-bottom: 16px; }
+
+        .bom-main-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #111827;
+            margin: 0 0 2px 0;
+        }
+
+        .bom-sub-title {
+            font-size: 12px;
+            color: #6b7280;
+            margin: 0;
+        }
+
+        .action-bar {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .btn-action {
+            background: #f9fafb;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            padding: 4px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .btn-action:hover { background: #f3f4f6; }
+
+        .bom-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        details { border-radius: 4px; }
+        details.hidden-node { display: none !important; }
+
+        summary {
+            list-style: none;
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13.5px;
+            user-select: none;
+            transition: background 0.12s ease;
+        }
+
+        summary:hover { background-color: #f9fafb; }
+        summary::-webkit-details-marker { display: none; }
+
+        .no-child summary { cursor: default; }
+        .no-child summary .chevron-icon { visibility: hidden; }
+
+        .item-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chevron-icon {
+            color: #6b7280;
+            font-size: 10px;
+            width: 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.15s ease;
+        }
+
+        details[open] > summary .chevron-icon { transform: rotate(90deg); }
+
+        .lvl-badge {
+            font-size: 11px;
+            font-weight: 700;
+            background: #f1f5f9;
+            color: #475569;
+            border: 1px solid #cbd5e1;
+            padding: 1px 6px;
+            border-radius: 4px;
+            margin-right: 4px;
+            display: inline-block;
+            min-width: 22px;
+            text-align: center;
+        }
+
+        .item-code {
+            font-weight: 600;
+            color: #111827;
+            font-size: 13.5px;
+        }
+
+        .item-desc {
+            color: #6b7280;
+            margin-left: 6px;
+            font-weight: 400;
+            font-size: 13px;
+        }
+
+        .item-right {
+            display: grid;
+            grid-template-columns: 80px 120px 120px 150px;
+            align-items: center;
+            gap: 10px;
+            font-size: 12.5px;
+            color: #6b7280;
+            text-align: right;
+        }
+
+        .item-right > span {
+            display: inline-block;
+            text-align: center;
+        }
+
+        .req-badge {
+            font-size: 12.5px;
+            font-weight: 500;
+            color: #374151;
+            width: 100%;
+        }
+
+        .tag-shortage-badge {
+            background-color: transparent ;
+            color: #dc2626;
+            border: 2px solid #ef4444; /* เพิ่มเส้นกรอบสีแดงหนาเด่น */
+            box-shadow: 0 0 6px rgba(239, 68, 68, 0.35); /* เพิ่มแสงเงาสีแดงกระจาย */
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 800;
+            width: 100%;
+            display: inline-block;
+            text-align: center;
+        }
+
+        .tag-sufficient-badge {
+            background-color: #f0fdf4;
+            color: #15803d;
+            border: 1px solid #86efac;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10.5px;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .tag-not-needed-badge {
+            background-color: #f3f4f6;
+            color: #6b7280;
+            border: 1px solid #d1d5db;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10.5px;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .tag-child-shortage-badge {
+            background-color: #fffbe6;
+            color: #d97706;
+            border: 1px solid #fde047;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 10.5px;
+            font-weight: 600;
+            width: 100%;
+        }
+
+        .stock-badge {
+            font-size: 12.5px;
+            font-weight: 500;
+            color: #374151;
+            width: 100%;
+        }
+
+        .total-qty-badge {
+            font-weight: 600;
+            color: #111827;
+            text-align: center !important;
+        }
+
+        .children-container {
+            padding-left: 20px;
+            margin-left: 15px;
+            border-left: 1.5px solid #e5e7eb;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-top: 2px;
+            margin-bottom: 2px;
+        }
+    </style>
+</head>
+<body>
+    <div class="section-title">Today's production risk</div>
+
+    <div class="dashboard-grid">
+        <div class="metric-card">
+            <div class="metric-icon icon-red">⚠️</div>
+            <div class="metric-info">
+                <h2 id="shortage-count-text">{{SHORTAGE_COUNT}}</h2>
+                <p>parts blocking production</p>
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-icon icon-amber">📦</div>
+            <div class="metric-info">
+                <h2>1</h2>
+                <p>models affected ({{MODEL_NAME}})</p>
+            </div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-icon icon-green">🕒</div>
+            <div class="metric-info">
+                <h2>{{TARGET_QTY}}</h2>
+                <p>target production qty</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="filter-section">
+        <div class="filter-title">Parts to check</div>
+        <div class="pill-container" id="pill-container">
+            <button class="pill-btn active" onclick="filterCategory('ALL', this)">All</button>
+            <button class="pill-btn pill-btn-danger" onclick="filterShortageOnly(this)">🚨 Shortage Only</button>
+            <button class="pill-btn" onclick="filterCategory('FGD', this)">FGD</button>
+            <button class="pill-btn" onclick="filterCategory('INJ', this)">INJ</button>
+            <button class="pill-btn" onclick="filterCategory('PBA', this)">PBA</button>
+            <button class="pill-btn" onclick="filterCategory('IMP', this)">IMP</button>
+            <button class="pill-btn" onclick="filterCategory('BOI', this)">BOI</button>
+            <button class="pill-btn" onclick="filterCategory('SCB', this)">SCB</button>
+            <button class="pill-btn" onclick="filterCategory('SUC', this)">SUC</button>
+            <button class="pill-btn" onclick="filterCategory('CUW', this)">CUW</button>
+            <button class="pill-btn" onclick="filterCategory('SMT', this)">SMT</button>
+            <button class="pill-btn" onclick="filterCategory('MVA', this)">MVA</button>
+            <button class="pill-btn" onclick="filterCategory('DOM', this)">DOM</button>
+        </div>
+    </div>
+
+    <div class="highlight-card">
+        <div class="highlight-left">
+            <span class="tag-urgent">urgent</span>
+            <div>
+                <div class="highlight-title" id="highlight-title">Active Category: ALL — {{MODEL_NAME}}</div>
+                <div class="highlight-sub" id="highlight-sub">Showing parts for {{TARGET_QTY}} target production</div>
+            </div>
+        </div>
+        <div class="highlight-right">
+            <span class="tag-category" id="current-cat-tag">ALL</span>
+        </div>
+    </div>
+
+    <div class="bom-header-wrapper">
+        <div class="bom-main-title">Details — {{MODEL_NAME}}</div>
+        <div class="bom-sub-title">Select a part category above to filter, or expand a row to see details.</div>
+    </div>
+
+    <div class="action-bar">
+        <button class="btn-action" onclick="toggleAll(true)">Expand all</button>
+        <button class="btn-action" onclick="toggleAll(false)">Collapse all</button>
+    </div>
+
+    <div class="bom-container">
+        <!-- Table Header Row -->
+        <div class="bom-table-header">
+            <div class="header-left">Part Code & Description</div>
+            <div class="header-right">
+                <span>Usage</span>
+                <span>Requirement</span>
+                <span>Stock On-Hand</span>
+                <span>Status</span>
+            </div>
+        </div>
+        <div id="bom_tree_list" class="bom-list"></div>
+    </div>
+
+    <script id="tree-data" type="text/plain">
+        {{TREE_DATA_JSON}}
+    </script>
+
+    <script type="text/javascript">
+        var activeCategory = 'ALL';
+
+        function renderBOMNode(node) {
+            var hasChildren = node.children && node.children.length > 0;
+            var wrapperClass = hasChildren ? '' : 'no-child';
+            var cat = node.category || 'OTHER';
+
+            var shouldOpen = node.level === '0' || node.level === '1' || node.status === 'SHORTAGE' || node.status === 'CHILD_SHORTAGE';
+            var html = '<details ' + (shouldOpen ? 'open' : '') + ' class="' + wrapperClass + '" data-cat="' + cat + '" data-level="' + node.level + '" data-status="' + node.status + '">';
+            html += '<summary>';
+
+            html += '  <div class="item-left">';
+            html += '    <span class="chevron-icon">▶</span>';
+            html += '    <span class="lvl-badge">L' + node.level + '</span>';
+            html += '    <span class="item-code">' + node.code + '</span>';
+            html += '    <span class="item-desc">' + node.desc + '</span>';
+            html += '  </div>';
+
+            html += '  <div class="item-right">';
+            // Col 1: Usage
+            if (node.req_base) {
+                html += '    <span class="req-badge">' + node.req_base + '</span>';
+            } else {
+                html += '    <span></span>';
+            }
+
+            // Col 2: Requirement Total Qty
+            if (node.qty) {
+                html += '    <span class="total-qty-badge">' + node.qty + '</span>';
+            } else {
+                html += '    <span></span>';
+            }
+
+            // Col 3: On Hand Stock (Excluding Level 0)
+            if (node.level === '0') {
+                html += '    <span></span>';
+            } else {
+                var stockVal = node.stock_qty !== undefined ? node.stock_qty : 0;
+                var stockStr = Number(stockVal).toLocaleString('en-US', {maximumFractionDigits: 2});
+                html += '    <span class="stock-badge">' + stockStr + '</span>';
+            }
+
+            // Col 4: Status
+            if (node.level === '0') {
+                if (node.status === 'CHILD_SHORTAGE') {
+                    html += '    <span class="tag-child-shortage-badge">SUB-SHORTAGE</span>';
+                } else {
+                    html += '    <span class="tag-sufficient-badge">READY TO PRODUCE</span>';
+                }
+            } else if (node.status === 'NOT_NEEDED') {
+                html += '    <span class="tag-not-needed-badge">PARENT IN STOCK</span>';
+            } else {
+                var stockVal = node.stock_qty !== undefined ? node.stock_qty : 0;
+                var reqVal = node.qty ? parseFloat(node.qty.replace(/,/g, '')) : 0;
+                var remainingVal = stockVal - reqVal;
+
+                if (node.status === 'SHORTAGE') {
+                    var shortStr = Number(node.shortage_qty).toLocaleString('en-US', {maximumFractionDigits: 2});
+                    html += '    <span class="tag-shortage-badge">SHORTAGE (-' + shortStr + ')</span>';
+                } else if (node.status === 'CHILD_SHORTAGE') {
+                    html += '    <span class="tag-child-shortage-badge">SUB-SHORTAGE</span>';
+                } else {
+                    var remainStr = Number(remainingVal).toLocaleString('en-US', {maximumFractionDigits: 2});
+                    html += '    <span class="tag-sufficient-badge">REMAINING: +' + remainStr + '</span>';
+                }
+            }
+            html += '  </div>';
+
+            html += '</summary>';
+
+            if (hasChildren) {
+                html += '<div class="children-container">';
+                for (var i = 0; i < node.children.length; i++) {
+                    html += renderBOMNode(node.children[i]);
+                }
+                html += '</div>';
+            }
+
+            html += '</details>';
+            return html;
+        }
+
+        function filterCategory(cat, btnEl) {
+            activeCategory = cat;
+
+            var pills = document.querySelectorAll(".pill-btn");
+            pills.forEach(function(p) { p.classList.remove("active"); });
+            if (btnEl) btnEl.classList.add("active");
+
+            document.getElementById("current-cat-tag").textContent = cat;
+            document.getElementById("highlight-title").textContent = "Active Category: " + cat + " — {{MODEL_NAME}}";
+
+            var allDetails = document.querySelectorAll("#bom_tree_list details");
+            var matchCount = 0;
+
+            allDetails.forEach(function(el) {
+                var nodeCat = el.getAttribute("data-cat");
+                var nodeLevel = el.getAttribute("data-level");
+
+                if (cat === 'ALL') {
+                    el.classList.remove("hidden-node");
+                    matchCount++;
+                } else {
+                    var hasMatchingChild = el.querySelector('details[data-cat="' + cat + '"]') !== null;
+                    if (nodeCat === cat || hasMatchingChild || nodeLevel === '0') {
+                        el.classList.remove("hidden-node");
+                        if (nodeCat === cat) matchCount++;
+                        el.open = true;
+                    } else {
+                        el.classList.add("hidden-node");
+                    }
+                }
+            });
+
+            document.getElementById("highlight-sub").textContent = 
+                cat === 'ALL' ? "Showing all parts for {{TARGET_QTY}} target production" 
+                              : "Found " + matchCount + " part(s) matching category '" + cat + "'";
+        }
+
+        function filterShortageOnly(btnEl) {
+            var pills = document.querySelectorAll(".pill-btn");
+            pills.forEach(function(p) { p.classList.remove("active"); });
+            if (btnEl) btnEl.classList.add("active");
+
+            document.getElementById("current-cat-tag").textContent = "SHORTAGE";
+            document.getElementById("highlight-title").textContent = "Active Filter: Shortage Only — {{MODEL_NAME}}";
+
+            var allDetails = document.querySelectorAll("#bom_tree_list details");
+            var matchCount = 0;
+
+            allDetails.forEach(function(el) {
+                var status = el.getAttribute("data-status");
+                var nodeLevel = el.getAttribute("data-level");
+                var hasShortageChild = el.querySelector('details[data-status="SHORTAGE"], details[data-status="CHILD_SHORTAGE"]') !== null;
+
+                if (status === 'SHORTAGE' || status === 'CHILD_SHORTAGE' || hasShortageChild || nodeLevel === '0') {
+                    el.classList.remove("hidden-node");
+                    el.open = true;
+                    if (status === 'SHORTAGE') matchCount++;
+                } else {
+                    el.classList.add("hidden-node");
+                }
+            });
+
+            document.getElementById("highlight-sub").textContent = "Showing " + matchCount + " shortage part(s) blocking production";
+        }
+
+        function toggleAll(openState) {
+            var visibleDetails = document.querySelectorAll("#bom_tree_list details:not(.hidden-node)");
+            visibleDetails.forEach(function (el) {
+                el.open = openState;
+            });
+        }
+
+        try {
+            var rawText = document.getElementById("tree-data").textContent.trim();
+            var rawData = JSON.parse(rawText);
+
+            var container = document.getElementById("bom_tree_list");
+            container.innerHTML = renderBOMNode(rawData);
+        } catch (e) {
+            console.error(e);
+            document.getElementById("bom_tree_list").innerHTML = 
+                "<div style='color:#ef4444; padding:20px;'>⚠️ Error loading BOM data: " + e.message + "</div>";
+        }
+    </script>
+</body>
+</html>

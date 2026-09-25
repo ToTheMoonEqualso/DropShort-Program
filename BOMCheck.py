@@ -1,724 +1,1100 @@
 import pandas as pd
-import streamlit as st
-import os
 import json
-import html
+from datetime import datetime
 import re
-import numpy as np
-from datetime import date, timedelta
 
-st.set_page_config(page_title="DropShot Visualizer - Multi-Level Allocation", layout="wide")
+def generate_full_dashboard():
+    df_onhand = pd.read_excel('TIKONHAND (100926 11.40).xlsx')
+    df_onhand.columns = ['LPROD', 'ONHAND']
+    onhand_dict = dict(zip(df_onhand['LPROD'], df_onhand['ONHAND']))
 
-MASTER_BOM_PATH = "Usage & Level.xlsx"
+    sheets_config = {
+        'movement': ("Drop short Movement on assy Sep'26.xlsx", 'Drop short Movement on8-30S (2)'),
+        'asy': ("Drop short Movement on assy Sep'26.xlsx", 'Drop short Movement on8-30S (2)'),
+        'clock': ("Drop short Movement on assy Sep'26.xlsx", 'Drop short Movement on8-30S (2)'),
+        'dec': ("Drop short Movement on assy Sep'26.xlsx", 'Drop short Movement on8-30S (2)'),
+        'pcbcoil': ("Drop short Movement on assy Sep'26.xlsx", 'Drop short Movement on8-30S (2)')
+    }
 
-def load_html_template():
-    if os.path.exists("index.html"):
-        with open("index.html", "r", encoding="utf-8") as f:
-            return f.read(), True
-    return "<h3>Error: ไม่พบไฟล์ index.html ในโฟลเดอร์นี้</h3>", False
-
-@st.cache_data
-def load_master_bom():
-    if not os.path.exists(MASTER_BOM_PATH):
-        st.error(f"⚠️ ไม่พบไฟล์ Master BOM `{MASTER_BOM_PATH}` ในโฟลเดอร์โปรเจกต์ กรุณานำไฟล์มาวางคู่กับ BOMCheck.py")
-        return None
-    
-    xls = pd.ExcelFile(MASTER_BOM_PATH)
-    df_master = pd.read_excel(xls, sheet_name=0)
-    df_master.columns = df_master.columns.astype(str).str.strip()
-    
-    df_master['Item'] = df_master['Item'].astype(str).str.strip()
-    df_master['Description'] = df_master['Description'].astype(str).str.strip()
-    df_master['Level_Str'] = df_master['Level'].astype(str).str.strip()
-    df_master['Level_Num'] = df_master['Level_Str'].apply(lambda x: x.count('.') if x != 'nan' else 0)
-    
-    if 'Usage' in df_master.columns:
-        df_master['Usage'] = pd.to_numeric(df_master['Usage'], errors='coerce').fillna(1.0)
-    else:
-        df_master['Usage'] = 1.0
-        
-    return df_master
-
-@st.cache_data
-def load_and_clean_movement(uploaded_file):
-    try:
-        xls = pd.ExcelFile(uploaded_file, engine='xlrd')
-    except Exception:
-        xls = pd.ExcelFile(uploaded_file)
-        
-    if 'Drop short Movement on 19-3 (2)' in xls.sheet_names:
-        df = pd.read_excel(xls, sheet_name='Drop short Movement on 19-3 (2)')
-        df.columns = df.columns.astype(str).str.strip()
-        df_clean = df.dropna(subset=['Part']).copy()
-        df_clean['Part'] = df_clean['Part'].astype(str).str.strip()
-        df_clean['Require'] = pd.to_numeric(df_clean['Require'], errors='coerce').fillna(0.0)
-        df_clean['On hand'] = pd.to_numeric(df_clean['On hand'], errors='coerce').fillna(0.0)
-        df_clean['Shortage'] = pd.to_numeric(df_clean['Shortage'], errors='coerce').fillna(0.0)
-        return df_clean
-
-    df_raw = pd.read_excel(xls, sheet_name=0)
-    raw_lines = df_raw.iloc[:, 0].astype(str).tolist()
-    
-    parsed_data = []
-    current_model = ""
-    current_req = 0.0
-    
-    for line in raw_lines:
-        line_str = line.strip()
-        if not line_str or '====' in line_str or 'Page :' in line_str or 'Part Praparation Order' in line_str:
-            continue
+    combined_parts_df = []
+    for cat, (filename, sheet_name) in sheets_config.items():
+        try:
+            df_drop = pd.read_excel(filename, sheet_name=sheet_name, header=None)
+            df_drop_clean = df_drop.iloc[7:].copy()
+            parts_df = df_drop_clean[[1, 3, 4, 5, 6, 9, 10]].copy()
+            parts_df.columns = ['Model', 'Warehouse', 'ReleaseDate', 'ShopNo', 'Requirement', 'Part', 'PartDesc']
             
-        if re.match(r'^[A-Z0-9]{2}\s+', line_str):
-            parts = line_str.split()
-            if len(parts) >= 7:
-                current_model = parts[1] + " " + parts[2] if len(parts) > 2 else parts[1]
-                try:
-                    current_req = float(parts[6].replace(',', ''))
-                except ValueError:
-                    current_req = 0.0
-        elif '|' in line_str:
-            sub_parts = line_str.split('|')
-            if len(sub_parts) >= 2:
-                content = sub_parts[-1].strip()
-                tokens = content.split()
-                if len(tokens) >= 3:
-                    part_code = tokens[0]
-                    try:
-                        shortage_qty = float(tokens[-2].replace(',', ''))
-                    except ValueError:
-                        shortage_qty = 0.0
-                    
-                    desc = " ".join(tokens[1:-3]) if len(tokens) > 4 else tokens[1]
-                    
-                    parsed_data.append({
-                        'Model Description': current_model,
-                        'Part': part_code,
-                        'Description': desc,
-                        'Require': current_req,
-                        'On hand': 0.0,
-                        'Shortage': shortage_qty
-                    })
-                    
-    return pd.DataFrame(parsed_data)
+            parts_df['Model'] = parts_df['Model'].ffill()
+            parts_df['Warehouse'] = parts_df['Warehouse'].ffill()
+            parts_df['ReleaseDate'] = pd.to_datetime(parts_df['ReleaseDate'], errors='coerce')
+            parts_df['ReleaseDate'] = parts_df['ReleaseDate'].ffill()
+            parts_df['ShopNo'] = parts_df['ShopNo'].ffill()
+            parts_df['Requirement'] = pd.to_numeric(parts_df['Requirement'], errors='coerce').ffill()
+            parts_df = parts_df.dropna(subset=['Model']).copy()
+            parts_df['Category'] = cat
+            combined_parts_df.append(parts_df)
+        except Exception as e:
+            print(f"Warning loading {cat}: {e}")
 
-def extract_category(description):
-    desc = str(description).strip()
-    categories = ['FGD', 'INJ', 'PBA', 'IMP', 'BOI', 'SCB', 'SUC', 'DOM', 'CUW', 'SMT', 'MVA']
-    desc_upper = desc.upper()
-    for cat in categories:
-        if desc_upper.endswith(cat):
-            return cat
-    tokens = desc.split()
-    if tokens:
-        last = tokens[-1].upper()
-        if len(last) in [3, 4]:
-            return last
-    return "OTHER"
+    full_parts_df = pd.concat(combined_parts_df, ignore_index=True) if combined_parts_df else pd.DataFrame()
 
-def build_tree_structure(df_model_bom, stock_map, target_order_qty):
-    stack = []
-    root_nodes = []
-    
-    for idx, row in df_model_bom.iterrows():
-        lvl = int(row['Level_Num'])
-        usage = float(row.get('Usage', 1.0))
-        item = str(row['Item']).strip()
-        desc = str(row['Description']).strip()
-        um = str(row.get('UM', 'EA')).strip()
-        cat = extract_category(desc)
-        
-        node = {
-            'Node_ID': f"node_{idx}",
-            'Level': lvl,
-            'Level_Str': str(row['Level']),
-            'Item': item,
-            'Description': desc,
-            'Category': cat,
-            'Usage': usage,
-            'UM': um,
-            'Stock_Qty': 0.0,
-            'Total_Required': 0.0,
-            'Shortage_Qty': 0.0,
-            'Is_Shortage': False,
-            'Has_Child_Shortage': False,
-            'Not_Needed': False,
-            'Children': []
-        }
-        
-        while stack and stack[-1]['Level'] >= lvl:
-            stack.pop()
-            
-        if stack:
-            stack[-1]['Children'].append(node)
-        else:
-            root_nodes.append(node)
-            
-        stack.append(node)
+    current_date = pd.Timestamp(datetime.now().date())
+    parts_df_filtered = full_parts_df[full_parts_df['ReleaseDate'] >= current_date].copy() if not full_parts_df.empty else pd.DataFrame()
 
-    def calculate_requirements(node, parent_needed_qty, parent_is_not_needed):
-        lvl = node['Level']
-        item = node['Item']
-        usage = node['Usage']
-        
-        if lvl == 0:
-            node['Total_Required'] = target_order_qty
-            node['Not_Needed'] = False
-            node['Is_Shortage'] = False
-            node['Shortage_Qty'] = 0.0
-            node['Stock_Qty'] = 0.0
-            
-            qty_to_pass_down = target_order_qty
-            child_not_needed = False
-        else:
-            if parent_is_not_needed or parent_needed_qty <= 0:
-                node['Not_Needed'] = True
-                node['Total_Required'] = 0.0
-                node['Stock_Qty'] = stock_map.get(item, {}).get('On_Hand', 0.0)
-                node['Shortage_Qty'] = 0.0
-                node['Is_Shortage'] = False
-                qty_to_pass_down = 0.0
-                child_not_needed = True
+    df_fgd = pd.read_excel('Usage & Level.xlsx', sheet_name='FGD')
+    df_notest = pd.read_excel('Usage & Level.xlsx', sheet_name='NOTEST')
+
+    def parse_bom_sheet(df, is_notest=False):
+        bom_dict = {}
+        current_group_key = None
+        current_components = []
+
+        for _, row in df.iterrows():
+            model_desc = str(row['Model Description']).strip() if 'Model Description' in row else str(row.iloc[0]).strip()
+            lvl_str = str(row['Level']).strip() if 'Level' in row else str(row.iloc[3]).strip()
+            item = str(row['Item']).strip() if 'Item' in row else str(row.iloc[4]).strip()
+            desc = str(row['Description']) if pd.notna(row['Description']) else 'Component Part'
+            usage = float(row['Usage']) if 'Usage' in row and pd.notna(row['Usage']) else 1.0
+
+            if is_notest:
+                is_new_group = (lvl_str == '.1')
+                clean_key = re.sub(r'[\s-]*TEST$', '', model_desc, flags=re.IGNORECASE).strip().upper()
             else:
-                movement_info = stock_map.get(item, {'On_Hand': 0.0, 'Shortage': 0.0})
-                current_stock = movement_info['On_Hand']
-                required_qty = usage * parent_needed_qty
-                
-                node['Total_Required'] = required_qty
-                node['Stock_Qty'] = current_stock
-                node['Not_Needed'] = False
-                
-                if current_stock >= required_qty:
-                    node['Shortage_Qty'] = 0.0
-                    node['Is_Shortage'] = False
-                    qty_to_pass_down = 0.0
-                    child_not_needed = True
+                is_new_group = (lvl_str == '0' or lvl_str == '0.0' or lvl_str == '.1')
+                clean_key = model_desc.strip().upper()
+
+            if not current_group_key or (is_new_group and current_group_key != clean_key):
+                if current_group_key and current_components:
+                    bom_dict[current_group_key] = current_components
+                current_group_key = clean_key
+                current_components = []
+
+            if is_notest:
+                lvl_num = lvl_str.count('.')
+            else:
+                if lvl_str == '0' or lvl_str == '0.0':
+                    lvl_num = 0
                 else:
-                    needed_more = required_qty - current_stock
-                    node['Shortage_Qty'] = needed_more
-                    node['Is_Shortage'] = True
-                    qty_to_pass_down = needed_more
-                    child_not_needed = False
+                    lvl_num = lvl_str.count('.')
 
-        for child in node['Children']:
-            calculate_requirements(child, qty_to_pass_down, child_not_needed)
-
-    def mark_child_shortages(n):
-        has_sub_shortage = False
-        for child in n['Children']:
-            child_has_shortage = mark_child_shortages(child)
-            if child['Is_Shortage'] or child_has_shortage:
-                has_sub_shortage = True
-        n['Has_Child_Shortage'] = has_sub_shortage
-        return has_sub_shortage
-
-    for root in root_nodes:
-        calculate_requirements(root, target_order_qty, False)
-        mark_child_shortages(root)
-        
-    return root_nodes
-
-def build_echarts_json(nodes):
-    def _convert_node(n):
-        item_code = str(n.get("Item", "")).strip()
-        description = str(n.get("Description", "")).strip()
-        level_num = n.get("Level", 0)
-        um = str(n.get("UM", "pc")).strip()
-        usage = n.get("Usage", 1.0)
-        req_qty = n.get("Total_Required", 0.0)
-        cat = n.get("Category", "OTHER")
-        not_needed = n.get("Not_Needed", False)
-        
-        is_shortage = n.get("Is_Shortage", False)
-        has_child_shortage = n.get("Has_Child_Shortage", False)
-        
-        if not_needed:
-            status = "NOT_NEEDED"
-        elif is_shortage:
-            status = "SHORTAGE"
-        elif has_child_shortage:
-            status = "CHILD_SHORTAGE"
-        else:
-            status = "OK"
-            
-        children = [_convert_node(child) for child in n.get("Children", [])]
-        usage_str = f"{usage:,.0f}" if usage.is_integer() else f"{usage:,.4f}"
-        qty_str = f"{req_qty:,.0f} {um}" if req_qty.is_integer() else f"{req_qty:,.2f} {um}"
-        
-        return {
-            "code": item_code,
-            "desc": description,
-            "category": cat,
-            "level": str(level_num),
-            "req_base": usage_str,
-            "qty": qty_str,
-            "status": status,
-            "not_needed": not_needed,
-            "shortage_qty": n.get("Shortage_Qty", 0.0),
-            "stock_qty": n.get("Stock_Qty", 0.0),
-            "children": children
-        }
-
-    if isinstance(nodes, list):
-        if len(nodes) == 1:
-            return _convert_node(nodes[0])
-        else:
-            return {
-                "code": "ROOT",
-                "desc": "Main Model Breakdown",
-                "category": "ALL",
-                "level": "0",
-                "req_base": "1",
-                "qty": "",
-                "status": "CHILD_SHORTAGE" if any(n.get("Is_Shortage") or n.get("Has_Child_Shortage") for n in nodes) else "OK",
-                "children": [_convert_node(r) for r in nodes]
-            }
-    return _convert_node(nodes)
-
-def get_all_parts_df(nodes):
-    flat = []
-    def _traverse(n_list):
-        for n in n_list:
-            flat.append({
-                'Level (ชั้น)': n['Level'],
-                'Item Code': n['Item'],
-                'Description': n['Description'],
-                'Category': n['Category'],
-                'Usage/Unit (ต่อหน่วย)': n['Usage'],
-                'Stock ในคลังจริง (On Hand)': n['Stock_Qty'],
-                'ต้องใช้ทั้งหมด (Total Req)': n['Total_Required'],
-                'สถานะ Drop-shot': 'ขาด (Shortage)' if n['Is_Shortage'] else 'พอ (Sufficient)',
-                'จำนวนที่ขาด': n['Shortage_Qty'] if n['Is_Shortage'] else 0.0,
-                'หน่วย': n['UM']
-            })
-            _traverse(n['Children'])
-    _traverse(nodes)
-    return pd.DataFrame(flat)
-
-def check_model_overall_shortage(df_master_bom, stock_map, model_name, default_target=500.0):
-    df_model = df_master_bom[df_master_bom['Model'] == model_name].copy()
-    tree_nodes = build_tree_structure(df_model, stock_map, default_target)
-    df_all_parts = get_all_parts_df(tree_nodes)
-    shortage_parts = df_all_parts[df_all_parts['สถานะ Drop-shot'] == 'ขาด (Shortage)']
-    return len(shortage_parts) > 0, len(shortage_parts)
-
-# --- STREAMLIT UI ---
-st.title("🎯 DropShot Visualizer — Multi-Level Shortage & Stock Allocation System")
-
-df_master_bom = load_master_bom()
-
-if df_master_bom is not None:
-    st.sidebar.header("📁 เมนูหลัก")
-    
-    use_mock_stock = st.sidebar.checkbox("🧪 โหมดทดสอบ: สมมติค่า Stock On-Hand เอง", value=False)
-    
-    uploaded_file = None
-    if not use_mock_stock:
-        uploaded_file = st.sidebar.file_uploader("📂 อัปโหลดไฟล์ Drop short Movement (.xls / .xlsx)", type=['xls', 'xlsx'])
-    
-    if uploaded_file or use_mock_stock:
-        stock_map = {}
-        
-        if use_mock_stock:
-            st.sidebar.subheader("⚙️ ตั้งค่า Mock Stock")
-            mock_mode = st.sidebar.radio("รูปแบบการจำลอง:", ["🎲 สุ่มสต็อกหลายระดับอัตโนมัติ (Random)", "✏️ กำหนด On-Hand แต่ละชิ้นส่วนเอง (Manual Table)"])
-            
-            all_items = df_master_bom['Item'].unique()
-            
-            if mock_mode == "🎲 สุ่มสต็อกหลายระดับอัตโนมัติ (Random)":
-                seed_val = st.sidebar.number_input("Random Seed (สุ่มรูปเดิม):", min_value=1, value=42)
-                np.random.seed(seed_val)
-                
-                for item in all_items:
-                    rand_type = np.random.choice(["SUFFICIENT", "SHORTAGE", "ZERO"], p=[0.5, 0.3, 0.2])
-                    if rand_type == "SUFFICIENT":
-                        stock_map[item] = {'On_Hand': float(np.random.randint(1000, 10000)), 'Shortage': 0.0}
-                    elif rand_type == "SHORTAGE":
-                        stock_map[item] = {'On_Hand': float(np.random.randint(10, 300)), 'Shortage': 100.0}
-                    else:
-                        stock_map[item] = {'On_Hand': 0.0, 'Shortage': 500.0}
-                        
-            else:
-                st.info("💡 สามารถกดดับเบิ้ลคลิกเพื่อแก้ไขตัวเลขในคอลัมน์ **On_Hand_Stock** ทางด้านล่างได้ทันทีครับ")
-                if 'mock_stock_df' not in st.session_state:
-                    sample_df = pd.DataFrame({'Part': all_items, 'On_Hand_Stock': 500.0})
-                    st.session_state['mock_stock_df'] = sample_df
-                    
-                edited_df = st.data_editor(
-                    st.session_state['mock_stock_df'],
-                    column_config={
-                        "Part": "รหัสชิ้นส่วน (Item)",
-                        "On_Hand_Stock": st.column_config.NumberColumn("ยอด On-Hand สมมติ", min_value=0.0, step=10.0)
-                    },
-                    use_container_width=True,
-                    height=200
-                )
-                
-                for _, r in edited_df.iterrows():
-                    stock_map[str(r['Part']).strip()] = {'On_Hand': float(r['On_Hand_Stock']), 'Shortage': 0.0}
-
-        else:
-            df_movement = load_and_clean_movement(uploaded_file)
-            if 'Part' in df_movement.columns:
-                for _, r in df_movement.iterrows():
-                    stock_map[str(r['Part']).strip()] = {
-                        'On_Hand': float(r.get('On hand', 0.0)),
-                        'Shortage': float(r.get('Shortage', 0.0))
-                    }
-
-        df_lvl0 = df_master_bom[df_master_bom['Level_Num'] == 0].copy()
-        models_lvl0 = df_lvl0['Model'].unique()
-        
-        if 'selected_model' not in st.session_state or st.session_state['selected_model'] not in models_lvl0:
-            st.session_state['selected_model'] = models_lvl0[0]
-
-        st.sidebar.divider()
-        st.sidebar.subheader("🎯 เลือก Model")
-        selected_model_input = st.sidebar.selectbox(
-            "เลือก Model (Level 0) ที่ต้องการดูรายละเอียด:",
-            models_lvl0,
-            index=list(models_lvl0).index(st.session_state['selected_model'])
-        )
-        st.session_state['selected_model'] = selected_model_input
-        
-        target_qty_input = st.sidebar.number_input("เป้าหมายการผลิต (Target Order Qty):", min_value=1.0, value=500.0, step=50.0)
-
-        tab1, tab2, tab3 = st.tabs([
-            "📋 รายการ Model ทั้งหมด (Level 0 Overview)", 
-            "🧠 รายละเอียดและโครงสร้าง Drop-down (Model Hierarchy View)",
-            "📊 สรุปรวมชิ้นส่วนซ้ำทุก Model (Consolidated View)"
-        ])
-        
-        # --- TAB 1: Level 0 Overview ---
-        with tab1:
-            st.subheader("📋 รายการ Model และวิเคราะห์ชิ้นส่วนช็อตตามลำดับการผลิต")
-            
-            # --- ปุ่มสุ่มวันที่สำหรับทดสอบตัดสต็อกสะสมตามลำดับวัน ---
-            col_date_a, col_date_b = st.columns([3, 1])
-            with col_date_b:
-                if st.button("🎲 สุ่มกระจายวันที่ต้องการผลิต"):
-                    np.random.seed(None)
-                    st.session_state['model_plan_dates'] = {
-                        m: date.today() + timedelta(days=int(np.random.randint(0, 5))) 
-                        for m in models_lvl0
-                    }
-                    st.rerun()
-
-            if 'model_plan_dates' not in st.session_state:
-                np.random.seed(42)
-                st.session_state['model_plan_dates'] = {
-                    m: date.today() + timedelta(days=int(np.random.randint(0, 5))) 
-                    for m in models_lvl0
-                }
-
-            # เรียงคิวการคำนวณตัดสต็อกสะสมตามลำดับ "วันที่ต้องการผลิต" (FIFO Sequential Depletion)
-            sorted_models_by_date = sorted(models_lvl0, key=lambda x: st.session_state['model_plan_dates'].get(x, date.today()))
-            
-            running_stock_map = {k: v.copy() for k, v in stock_map.items()}
-            model_status_list = []
-            detailed_shortage_records = []
-            
-            # วนลูปตัดสต็อกสะสมจริงตามลำดับคิวผลิต
-            for seq_idx, m in enumerate(sorted_models_by_date, start=1):
-                m_date = st.session_state['model_plan_dates'].get(m, date.today())
-                
-                # สร้าง Tree และหาชิ้นส่วนที่ช็อตของ Model นี้โดยอิงจากสต็อกที่เหลือสะสม (running_stock_map)
-                df_m_bom = df_master_bom[df_master_bom['Model'] == m]
-                tree_nodes = build_tree_structure(df_m_bom, running_stock_map, target_qty_input)
-                df_all_parts = get_all_parts_df(tree_nodes)
-                df_short_parts = df_all_parts[df_all_parts['สถานะ Drop-shot'] == 'ขาด (Shortage)']
-                
-                # บันทึกข้อมูลชิ้นส่วนที่ช็อตสำหรับตารางวิเคราะห์
-                for _, p_row in df_short_parts.iterrows():
-                    detailed_shortage_records.append({
-                        'ลำดับผลิต': seq_idx,
-                        'Model': m,
-                        'วันที่ผลิต': m_date,
-                        'Part Code': p_row['Item Code'],
-                        'ชื่อสิ่งที่ช็อต (Description)': p_row['Description'],
-                        'Requirement': p_row['ต้องใช้ทั้งหมด (Total Req)'],
-                        'On-Hand': p_row['Stock ในคลังจริง (On Hand)'],
-                        'Shorted': p_row['จำนวนที่ขาด'],
-                        'หน่วย': p_row['หน่วย']
-                    })
-                
-                model_status_list.append({
-                    'Model': m,
-                    'Has_Shortage': len(df_short_parts) > 0,
-                    'Shortage_Count': len(df_short_parts)
+            if current_group_key:
+                current_components.append({
+                    "Level": lvl_str,
+                    "Level_Num": lvl_num,
+                    "Part": item,
+                    "Description": desc,
+                    "Usage": usage
                 })
-                
-                # ตัดสต็อกสะสมจริงตาม BOM สำหรับคิวถัดไป
-                for _, r in df_m_bom.iterrows():
-                    p_item = str(r['Item']).strip()
-                    p_usage = float(r.get('Usage', 1.0))
-                    needed = p_usage * target_qty_input
-                    if p_item in running_stock_map:
-                        running_stock_map[p_item]['On_Hand'] = max(0.0, running_stock_map[p_item]['On_Hand'] - needed)
 
-            df_status_map = pd.DataFrame(model_status_list)
-            shortage_models_cnt = df_status_map['Has_Shortage'].sum()
-            sufficient_models_cnt = len(models_lvl0) - shortage_models_cnt
+        if current_group_key and current_components:
+            bom_dict[current_group_key] = current_components
+
+        return bom_dict
+
+    bom_fgd = parse_bom_sheet(df_fgd, is_notest=False)
+    bom_notest = parse_bom_sheet(df_notest, is_notest=True)
+
+    def process_data(dataframe):
+        remaining_onhand = {str(k).strip(): float(v) for k, v in onhand_dict.items() if pd.notna(v)}
+        summary = []
+        bom_details = {}
+
+        for model_name, group in dataframe.groupby('Model', sort=False):
+            display_name = str(model_name).strip()
+            upper_name = display_name.upper()
+            total_req = float(group['Requirement'].max())
+            cat_val = group.iloc[0]['Category'] if 'Category' in group.columns else 'movement'
             
-            # --- Metric Summary Cards ---
-            col1, col2, col3 = st.columns(3)
-            col1.metric("จำนวน Model ทั้งหมด", f"{len(models_lvl0)} รุ่น")
-            col2.metric("Model ที่ขาดชิ้นส่วน (ทุกชั้น)", f"{shortage_models_cnt} รุ่น", delta_color="inverse")
-            col3.metric("Model ที่ชิ้นส่วนพอครบทุกชั้น", f"{sufficient_models_cnt} รุ่น")
+            raw_date = group.iloc[0]['ReleaseDate']
+            mfg_date = raw_date.strftime('%Y-%m-%d') if pd.notna(raw_date) else '-'
+
+            wh_val = str(group.iloc[0]['Warehouse']).strip() if pd.notna(group.iloc[0]['Warehouse']) else '-'
+            shop_val = str(group.iloc[0]['ShopNo']).strip() if pd.notna(group.iloc[0]['ShopNo']) else '-'
+            if shop_val.endswith('.0'):
+                shop_val = shop_val[:-2]
+
+            model_comps = []
+            is_notest_model = ('-NO' in upper_name or '-N' in upper_name)
             
-            st.divider()
-
-            # --- สร้าง Sub-tabs ย่อยใน Tab 1 ---
-            tab1_sub1, tab1_sub2 = st.tabs([
-                "📋 ภาพรวมรายการ Model ทั้งหมด", 
-                "🚨 วิเคราะห์ชิ้นส่วนช็อตซ้ำตามคิวผลิต (Sequential Shortage)"
-            ])
-
-            # --- Sub-tab 1: ตารางสรุปภาพรวม Model ---
-            with tab1_sub1:
-                st.info(f"📌 Model ที่เลือกดูในปัจจุบัน: **{st.session_state['selected_model']}** (เปลี่ยน Model ได้จากแถบ Sidebar ด้านซ้าย)")
-                
-                lvl0_display = df_lvl0[['Model', 'Description', 'Usage']].copy()
-                lvl0_display['Requirement'] = lvl0_display['Usage'] * target_qty_input
-                lvl0_display = lvl0_display.merge(df_status_map, on='Model', how='left')
-                
-                lvl0_display['MODEL NAME'] = lvl0_display['Model'] + "\n" + lvl0_display['Description']
-                lvl0_display['วันที่ต้องการผลิต'] = lvl0_display['Model'].map(st.session_state['model_plan_dates'])
-                lvl0_display['SHORTAGE'] = lvl0_display.apply(
-                    lambda r: f"🔴 ขาด ({r['Shortage_Count']} รายการ)" if r['Has_Shortage'] else "🟢 พร้อมผลิต (0 รายการ)", axis=1
-                )
-                lvl0_display = lvl0_display.sort_values(by='วันที่ต้องการผลิต')
-                
-                st.markdown("#### 📄 ตารางสรุปรายการ Model ทั้งหมด (คำนวณตัดสต็อกสะสมตามลำดับวันที่ผลิต)")
-                
-                st.data_editor(
-                    lvl0_display[['MODEL NAME', 'วันที่ต้องการผลิต', 'Requirement', 'SHORTAGE']],
-                    column_config={
-                        "MODEL NAME": st.column_config.TextColumn("ชื่อโมเดล (MODEL NAME)"),
-                        "วันที่ต้องการผลิต": st.column_config.DateColumn("วันที่ต้องการผลิต", format="YYYY-MM-DD"),
-                        "Requirement": st.column_config.NumberColumn("ความต้องการ (REQUIREMENT)", format="%d EA"),
-                        "SHORTAGE": st.column_config.TextColumn("รายการที่ช็อต (SHORTAGE)")
-                    },
-                    use_container_width=True,
-                    hide_index=True,
-                    disabled=["MODEL NAME", "วันที่ต้องการผลิต", "Requirement", "SHORTAGE"]
-                )
-
-            # --- Sub-tab 2: รายการชิ้นส่วนช็อตซ้ำ เรียงตามคิวผลิต ---
-            with tab1_sub2:
-                st.markdown("#### 🚨 รายการชิ้นส่วนที่ช็อตซ้ำกันข้าม Model (แยกประมวลผลเฉพาะภายในวันผลิตเดียวกัน)")
-                st.caption("ตารางนี้คำนวณตัดสต็อกสะสมเฉพาะ **Model ที่ผลิตในวันเดียวกัน** ( On-Hand ถูกอัปเดตใหม่ทุกวัน ไม่ดึงสต็อกตัดข้ามวัน)")
-
-                if detailed_shortage_records:
-                    # แปลงข้อมูลเป็น DataFrame
-                    df_all_records = pd.DataFrame(detailed_shortage_records)
-                    
-                    # 1. จัดกลุ่มประมวลผลหาชิ้นส่วนที่ช็อตซ้ำ "ภายในวันผลิตเดียวกัน" (Same Date Repeated Parts)
-                    df_all_records['Same_Date_Part_Count'] = df_all_records.groupby(['วันที่ผลิต', 'Part Code'])['Model'].transform('count')
-                    
-                    filter_mode = st.radio(
-                        "🔍 รูปแบบการกรองรายการช็อต:",
-                        ["แสดงเฉพาะชิ้นส่วนที่ช็อตซ้ำกันในวันเดียวกัน (Repeated Shortage on Same Date)", "แสดงชิ้นส่วนที่ช็อตทั้งหมดแยกตามวัน (All Shortage Items by Date)"],
-                        horizontal=True
-                    )
-
-                    if filter_mode == "แสดงเฉพาะชิ้นส่วนที่ช็อตซ้ำกันในวันเดียวกัน (Repeated Shortage on Same Date)":
-                        df_display_final = df_all_records[df_all_records['Same_Date_Part_Count'] > 1].copy()
-                        if df_display_final.empty:
-                            st.info("💡 ไม่พบชิ้นส่วนช็อตที่ใช้ซ้ำกันข้าม Model ในวันผลิตเดียวกัน")
-                    else:
-                        df_display_final = df_all_records.copy()
-
-                    if not df_display_final.empty:
-                        # 2. จัดกลุ่มแสดงผลแยกตาม "วันที่ผลิต" ก่อน แล้วค่อยกลุ่มตาม "ชิ้นส่วน"
-                        grouped_by_date = df_display_final.groupby('วันที่ผลิต')
-
-                        for prod_date, date_group_df in grouped_by_date:
-                            st.markdown(f"##### 📅 วันที่ผลิต: **{prod_date.strftime('%Y-%m-%d')}**")
-                            
-                            grouped_by_part = date_group_df.groupby(['Part Code', 'ชื่อสิ่งที่ช็อต (Description)', 'หน่วย'])
-
-                            for (p_code, p_desc, p_unit), part_group_df in grouped_by_part:
-                                total_short = part_group_df['Shorted'].sum()
-                                model_cnt = part_group_df['Model'].nunique()
-                                
-                                # ใช้ st.container(border=True) สร้างการ์ดขอบมน มินิมอล
-                                with st.container(border=True):
-                                    card_html = f"""
-                                    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 4px 0;">
-                                        <div style="display: flex; align-items: center; gap: 24px; flex-wrap: nowrap; overflow: hidden;">
-                                            <div style="font-size: 16px; font-weight: 800; color: #f8fafc; white-space: nowrap; min-width: 170px;">
-                                                {p_code}
-                                            </div>
-                                            <div style="font-size: 14px; font-weight: 700; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                                {p_desc}
-                                            </div>
-                                            <div style="font-size: 12.5px; color: #94a3b8; white-space: nowrap;">
-                                                กระทบในวันนี้: <b style="color: #f1f5f9;">{model_cnt} Models</b> | ยอดช็อตรวมวันนี้: 
-                                                <span style="color: #dc2626; font-weight: 800; border: 1.5px solid #ef4444; padding: 1px 6px; border-radius: 4px; background: transparent;">{total_short:,.2f} {p_unit}</span>
-                                            </div>
-                                        </div>
-                                        <div style="color: #94a3b8; font-size: 18px; padding-left: 12px;">&#8594;</div>
-                                    </div>
-                                    """
-                                    st.markdown(card_html, unsafe_allow_html=True)
-                                    
-                                    # ตารางแสดงคิวผลิตย่อยเฉพาะของวันนั้นๆ
-                                    with st.expander(f"🔍 ดูรายละเอียดคิวผลิตวันที่ {prod_date.strftime('%Y-%m-%d')} ของชิ้นส่วนนี้"):
-                                        st.dataframe(
-                                            part_group_df[[
-                                                'ลำดับผลิต', 'Model', 'Requirement', 'On-Hand', 'Shorted'
-                                            ]].style.format({
-                                                'Requirement': '{:,.2f}',
-                                                'On-Hand': '{:,.2f}',
-                                                'Shorted': '{:,.2f}'
-                                            }).map(
-                                                lambda x: 'color: #dc2626; font-weight: 800; border: 1.5px solid #ef4444;',
-                                                subset=['Shorted']
-                                            ),
-                                            use_container_width=True,
-                                            hide_index=True,
-                                            column_config={
-                                                "ลำดับผลิต": st.column_config.NumberColumn("คิวที่ (Seq)", format="#%d"),
-                                                "Model": st.column_config.TextColumn("Model"),
-                                                "Requirement": st.column_config.NumberColumn("Requirement"),
-                                                "On-Hand": st.column_config.NumberColumn("On-Hand สต็อกวันนั้น"),
-                                                "Shorted": st.column_config.NumberColumn("ยอด Shorted")
-                                            }
-                                        )
-                            st.divider()
-                else:
-                    st.success("🎉 สมบูรณ์แบบ! ไม่พบรายการชิ้นส่วนที่ช็อตในการวางแผนผลิตรอบนี้")
-
-        # --- TAB 2: Model Hierarchy View ---
-        with tab2:
-            selected_model = st.session_state['selected_model']
-            st.subheader(f"🎯 รายละเอียดและโครงสร้าง Drop-Down: Model **{selected_model}**")
-            
-            df_model_bom = df_master_bom[df_master_bom['Model'] == selected_model].copy()
-            
-            tree_nodes = build_tree_structure(df_model_bom, stock_map, target_qty_input)
-            df_all_parts = get_all_parts_df(tree_nodes)
-            df_shortage_only = df_all_parts[df_all_parts['สถานะ Drop-shot'] == 'ขาด (Shortage)']
-            
-            col_a, col_b = st.columns(2)
-            if len(df_shortage_only) > 0:
-                col_a.error(f"⚠️ พบชิ้นส่วนไม่เพียงพอ (Shortage) ทั้งหมด {len(df_shortage_only)} รายการ")
+            if is_notest_model:
+                model_comps = bom_notest.get(upper_name, [])
+                if not model_comps:
+                    for k, v in bom_notest.items():
+                        if k == upper_name or upper_name in k:
+                            model_comps = v
+                            break
             else:
-                col_a.success("🎉 ชิ้นส่วนครบถ้วน พร้อมสำหรับการประกอบชิ้นงาน (Sufficient)")
-                
-            col_b.info(f"📦 จำนวนรายการชิ้นส่วนทั้งหมดใน Model นี้: {len(df_all_parts)} รายการ")
-            
-            # --- สร้าง Sub-tabs ย่อยใน Tab 2 ---
-            sub_tab1, sub_tab2 = st.tabs([
-                "🌳 รายการโครงสร้างทั้งหมด (All Hierarchy Tree)", 
-                "🚨 เฉพาะชิ้นส่วนที่ช็อต (Shortage Only)"
-            ])
+                model_comps = bom_fgd.get(upper_name, [])
+                if not model_comps:
+                    for k, v in bom_fgd.items():
+                        if k == upper_name or upper_name == k:
+                            model_comps = v
+                            break
 
-            with sub_tab1:
-                html_template, is_success = load_html_template()
-                if not is_success:
-                    st.error(html_template)
-                else:
-                    tree_data = build_echarts_json(tree_nodes)
-                    shortage_count = len(df_shortage_only)
-                    shortage_color = "#dc2626" if shortage_count > 0 else "#16a34a"
+            model_shortage = False
+            processed_components = []
+
+            if model_comps:
+                for c in model_comps:
+                    part_code = c['Part']
+                    usage_qty = c['Usage']
+                    req_qty = total_req * usage_qty
                     
-                    rendered_html = html_template.replace("{{MODEL_NAME}}", html.escape(str(selected_model)))\
-                                                 .replace("{{SHORTAGE_COUNT}}", str(shortage_count))\
-                                                 .replace("{{SHORTAGE_COLOR}}", shortage_color)\
-                                                 .replace("{{TARGET_QTY}}", f"{target_qty_input:,.0f}")\
-                                                 .replace("{{TREE_DATA_JSON}}", json.dumps(tree_data, ensure_ascii=False))
+                    target_root_lvl = 1 if is_notest_model else 0
+                    if c['Level_Num'] == target_root_lvl:
+                        req_qty = total_req
+
+                    is_special_69 = str(part_code).endswith('69')
+                    available_qty = float(remaining_onhand.get(part_code, 0.0))
+
+                    if is_special_69:
+                        issued_qty = 0.0
+                        remaining_qty = available_qty
+                        status = ""
+                    else:
+                        status = 'Ready' if available_qty >= req_qty else 'Shortage'
+                        if status == 'Shortage' and c['Level_Num'] > target_root_lvl:
+                            model_shortage = True
+                        issued_qty = min(available_qty, req_qty)
+                        remaining_qty = max(0.0, available_qty - issued_qty)
+                        remaining_onhand[part_code] = remaining_qty
+
+                    processed_components.append({
+                        "Level": c['Level'],
+                        "Level_Num": c['Level_Num'],
+                        "Part": part_code,
+                        "Description": c['Description'],
+                        "Usage": usage_qty,
+                        "Requirement": req_qty,
+                        "OnHandBeforeIssue": available_qty,
+                        "Issued": issued_qty,
+                        "OnHand": remaining_qty,
+                        "Status": status
+                    })
+            else:
+                valid_parts = group.dropna(subset=['Part'])
+                for _, row in valid_parts.iterrows():
+                    part_code = str(row['Part']).strip()
+                    part_desc = str(row['PartDesc']) if pd.notna(row['PartDesc']) else 'Component Part'
+                    req_qty = float(row['Requirement'])
+                    available_qty = float(remaining_onhand.get(part_code, 0.0))
                     
-                    st.components.v1.html(rendered_html, height=850, scrolling=True)
+                    is_special_69 = part_code.endswith('69')
 
-            with sub_tab2:
-                st.markdown("### 🚨 รายการชิ้นส่วนที่ไม่เพียงพอต่อการผลิต (Shortage List)")
-                if len(df_shortage_only) > 0:
-                    df_short_display = df_shortage_only[[
-                        'Level (ชั้น)', 'Item Code', 'Description', 'Category', 
-                        'Usage/Unit (ต่อหน่วย)', 'Stock ในคลังจริง (On Hand)', 
-                        'ต้องใช้ทั้งหมด (Total Req)', 'จำนวนที่ขาด', 'หน่วย'
-                    ]].copy()
-                    df_short_display.rename(columns={'จำนวนที่ขาด': 'Shorted'}, inplace=True)
+                    if is_special_69:
+                        status = ""
+                        issued_qty = 0.0
+                        remaining_qty = available_qty
+                    else:
+                        status = 'Ready' if available_qty >= req_qty else 'Shortage'
+                        if status == 'Shortage':
+                            model_shortage = True
+                        issued_qty = min(available_qty, req_qty)
+                        remaining_qty = max(0.0, available_qty - issued_qty)
+                        remaining_onhand[part_code] = remaining_qty
 
-                    # ตัวหนังสือสีแดง ตัวหนา + กรอบแดง (ไม่มีพื้นหลัง)
-                    st.dataframe(
-                        df_short_display.style.format({
-                            'Usage/Unit (ต่อหน่วย)': '{:,.4f}',
-                            'Stock ในคลังจริง (On Hand)': '{:,.2f}',
-                            'ต้องใช้ทั้งหมด (Total Req)': '{:,.2f}',
-                            'Shorted': '{:,.2f}'
-                        }).map(
-                            lambda x: 'color: #dc2626; font-weight: 800; border: 2px solid #ef4444;',
-                            subset=['Shorted']
-                        ),
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.success("🎉 ไม่มีรายการชิ้นส่วนที่ช็อตใน Model นี้")
+                    processed_components.append({
+                        "Level": ".1" if is_notest_model else "0",
+                        "Level_Num": 1 if is_notest_model else 0,
+                        "Part": part_code,
+                        "Description": part_desc,
+                        "Usage": 1.0,
+                        "Requirement": req_qty,
+                        "OnHandBeforeIssue": available_qty,
+                        "Issued": issued_qty,
+                        "OnHand": remaining_qty,
+                        "Status": status
+                    })
 
-        # --- TAB 3: Consolidated View ---
-        with tab3:
-            st.subheader("📊 ตารางรวมรายการชิ้นส่วนที่ใช้ซ้ำกันข้าม Model")
-            
-            all_rows = []
-            for m in models_lvl0:
-                df_m = df_master_bom[df_master_bom['Model'] == m]
-                tn = build_tree_structure(df_m, stock_map, target_qty_input)
-                df_ap = get_all_parts_df(tn)
-                df_ap['Model'] = m
-                all_rows.append(df_ap)
-                
-            df_consolidated = pd.concat(all_rows, ignore_index=True)
-            
-            grouped_summary = df_consolidated.groupby(['Item Code', 'Description', 'หน่วย']).agg(
-                Grand_Total=('ต้องใช้ทั้งหมด (Total Req)', 'sum'),
-                Model_Count=('Model', 'nunique'),
-                Stock_On_Hand=('Stock ในคลังจริง (On Hand)', 'first')
-            ).reset_index().sort_values(by='Model_Count', ascending=False)
-            
-            search_kw = st.text_input("🔍 ค้นหา Item / Description:")
-            if search_kw:
-                grouped_summary = grouped_summary[
-                    grouped_summary['Item Code'].str.contains(search_kw, case=False) | 
-                    grouped_summary['Description'].str.contains(search_kw, case=False)
-                ]
-                
-            col_dl1, col_dl2 = st.columns([3, 1])
-            with col_dl1:
-                st.caption("คลิกที่รายการชิ้นส่วนด้านล่าง เพื่อเปิดดูรายละเอียดความต้องการของแต่ละ Model")
-            with col_dl2:
-                csv_data = grouped_summary.to_csv(index=False).encode('utf-8-sig')
-                st.download_button(
-                    label="📥 ดาวน์โหลดตารางสรุป (CSV)",
-                    data=csv_data,
-                    file_name="BOM_Consolidated_Summary.csv",
-                    mime="text/csv"
-                )
-            
-            for idx, row in grouped_summary.iterrows():
-                item_code = row['Item Code']
-                desc = row['Description']
-                total = row['Grand_Total']
-                um = row['หน่วย']
-                m_count = row['Model_Count']
-                stock = row['Stock_On_Hand']
-                
-                with st.expander(f"📦 **{item_code}** — {desc} | **Stock On Hand: {stock:,.2f} {um}** | **ความต้องการรวมทุกรุ่น: {total:,.2f} {um}** (ใช้ใน {m_count} Model)"):
-                    df_detail = df_consolidated[(df_consolidated['Item Code'] == item_code) & (df_consolidated['Description'] == desc)]
-                    df_detail_grouped = df_detail.groupby('Model').agg(
-                        Usage_Unit=('Usage/Unit (ต่อหน่วย)', 'first'),
-                        Total_Required=('ต้องใช้ทั้งหมด (Total Req)', 'sum')
-                    ).reset_index()
-                    df_detail_grouped.columns = ['Model (รุ่นที่ใช้)', 'Usage / Unit', f'จำนวนที่ต้องใช้ ({um})']
-                    
-                    st.dataframe(
-                        df_detail_grouped.style.format({
-                            'Usage / Unit': '{:,.2f}',
-                            f'จำนวนที่ต้องใช้ ({um})': '{:,.2f}'
-                        }),
-                        use_container_width=True
-                    )
-    else:
-        st.info("👈 กรุณาอัปโหลดไฟล์ `Drop short Movement...` หรือติ๊ก **โหมดทดสอบสมมติค่า Stock** ที่ Sidebar ด้านซ้าย")
+            bom_details[display_name] = processed_components
+            overall_status = 'Shortage' if model_shortage else 'Ready'
+            item_code = processed_components[0]['Part'] if processed_components else '-'
+            effective_on_hand = 0.0 if overall_status == 'Shortage' else total_req
+
+            summary.append({
+                "Model": display_name,
+                "Warehouse": wh_val,
+                "ShopNo": shop_val,
+                "ItemCode": item_code,
+                "Requirement": total_req,
+                "OnHand": effective_on_hand,
+                "Status": overall_status,
+                "ManufactureDate": mfg_date,
+                "Category": cat_val
+            })
+        return summary, bom_details
+
+    summary_data, bom_data = process_data(parts_df_filtered)
+
+    json_data = json.dumps(summary_data, ensure_ascii=False).replace("</", "<\\/")
+    json_bom = json.dumps(bom_data, ensure_ascii=False).replace("</", "<\\/")
+
+    html_template = """<!DOCTYPE html>
+<html lang="en" class="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Production Risk & Shortage Command Center</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style>
+    input[type="date"]::-webkit-calendar-picker-indicator {
+      background: transparent;
+      bottom: 0;
+      color: transparent;
+      cursor: pointer;
+      height: auto;
+      left: 0;
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: auto;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen flex">
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar" style="width: 256px; min-width: 256px;" class="bg-white border-r border-gray-200 p-4 h-screen sticky top-0 flex flex-col justify-between shadow-xs select-none transition-all duration-300 overflow-y-auto">
+    <div class="space-y-8">
+      <div class="space-y-1">
+        <div class="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-3 mb-2 sidebar-text">Main Menu</div>
+        
+        <button onclick="filterStatus('All')" id="sidebar-all" class="w-full relative flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-bold bg-gray-50 text-gray-900 transition-all cursor-pointer">
+          <span id="indicator-all" class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-black rounded-r-full"></span>
+          <svg class="w-4 h-4 text-gray-700 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+          <span class="sidebar-text">Dashboard</span>
+        </button>
+
+        <button onclick="filterStatus('Shortage')" id="sidebar-shortage" class="w-full relative flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-600 hover:bg-gray-50 transition-all cursor-pointer">
+          <span id="indicator-shortage" class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-black rounded-r-full hidden"></span>
+          <svg class="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+          <span class="sidebar-text">Shortage Blockers</span>
+        </button>
+
+        <button onclick="filterStatus('Ready')" id="sidebar-ready" class="w-full relative flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-600 hover:bg-gray-50 transition-all cursor-pointer">
+          <span id="indicator-ready" class="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-black rounded-r-full hidden"></span>
+          <svg class="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+          <span class="sidebar-text">Ready to Produce</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="space-y-4">
+      <button onclick="toggleSidebar()" class="w-full flex items-center gap-2 px-2 py-2 text-xs font-bold text-gray-700 hover:bg-gray-50 rounded-lg transition-colors cursor-pointer">
+        <span id="collapse-icon" class="text-sm font-black transition-transform duration-300">«</span>
+        <span class="sidebar-text">Collapse sidebar</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="flex-1 flex flex-col min-h-screen">
+    <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between gap-3 shadow-xs">
+      <div class="w-72 shrink-0 relative">
+        <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        </span>
+        <input type="text" id="search-input" placeholder="Quick search model or shop no..." class="w-full bg-gray-50 border border-gray-200 rounded-xl pl-9 pr-3 py-2 text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-black transition-all">
+      </div>
+
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="flex items-center gap-1 bg-gray-100 p-1 rounded-xl">
+          <button onclick="switchView('asy')" id="tab-asy" class="relative px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer">
+            ASY
+            <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-black rounded-full hidden"></span>
+          </button>
+          <button onclick="switchView('clock')" id="tab-clock" class="relative px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer">
+            Clock
+            <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-black rounded-full hidden"></span>
+          </button>
+          <button onclick="switchView('dec')" id="tab-dec" class="relative px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer">
+            DEC
+            <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-black rounded-full hidden"></span>
+          </button>
+          <button onclick="switchView('movement')" id="tab-movement" class="relative px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer">
+            Movement
+            <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-black rounded-full hidden"></span>
+          </button>
+          <button onclick="switchView('pcbcoil')" id="tab-pcbcoil" class="relative px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer">
+            PCB&COIL
+            <span class="absolute bottom-0 left-2 right-2 h-0.5 bg-black rounded-full hidden"></span>
+          </button>
+        </div>
+        
+        <div class="h-6 w-[1px] bg-gray-200"></div>
+
+        <div class="flex items-center gap-2">
+          <div class="relative bg-gray-50 border border-gray-200 rounded-xl px-2.5 py-1.5 hover:border-black transition-colors cursor-pointer">
+            <input type="date" id="date-filter-input" onchange="applyFilterAndSearch()" class="bg-transparent text-xs text-gray-700 uppercase focus:outline-none cursor-pointer w-26">
+          </div>
+          <button onclick="resetDateFilter()" class="cursor-pointer hover:scale-110 transition-transform select-none p-0.5 flex items-center justify-center" title="Clear data filter">
+            <video src="https://cdn-icons-mp4.flaticon.com/512/8121/8121324.mp4" autoplay loop muted playsinline class="w-5 h-5 object-contain pointer-events-none"></video>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div id="dashboard-view" class="p-8 space-y-6 flex-1">
+      
+      <!-- Landing Page -->
+      <div id="section-landing" class="space-y-4 py-8">
+        <div class="max-w-xl">
+          <h2 class="text-xl font-bold text-gray-900 mb-1">Select Production Category</h2>
+          <p class="text-xs text-gray-500">Please choose a category below to check production status and component inventory.</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-5 gap-6 pt-4">
+          <div onclick="selectCategory('asy')" class="bg-white border-2 border-gray-200 hover:border-black p-6 rounded-2xl shadow-xs cursor-pointer transition-all hover:shadow-lg flex flex-col justify-between group h-40">
+            <div class="flex justify-between items-start">
+              <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-black">Category</span>
+              <span class="w-3 h-3 rounded-full bg-blue-500"></span>
+            </div>
+            <div>
+              <h4 class="font-black text-gray-900 text-lg mb-1">ASY</h4>
+              <p class="text-xs text-gray-500">Assembly Production</p>
+            </div>
+          </div>
+          <div onclick="selectCategory('clock')" class="bg-white border-2 border-gray-200 hover:border-black p-6 rounded-2xl shadow-xs cursor-pointer transition-all hover:shadow-lg flex flex-col justify-between group h-40">
+            <div class="flex justify-between items-start">
+              <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-black">Category</span>
+              <span class="w-3 h-3 rounded-full bg-amber-500"></span>
+            </div>
+            <div>
+              <h4 class="font-black text-gray-900 text-lg mb-1">Clock</h4>
+              <p class="text-xs text-gray-500">Clock Mechanism</p>
+            </div>
+          </div>
+          <div onclick="selectCategory('dec')" class="bg-white border-2 border-gray-200 hover:border-black p-6 rounded-2xl shadow-xs cursor-pointer transition-all hover:shadow-lg flex flex-col justify-between group h-40">
+            <div class="flex justify-between items-start">
+              <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-black">Category</span>
+              <span class="w-3 h-3 rounded-full bg-purple-500"></span>
+            </div>
+            <div>
+              <h4 class="font-black text-gray-900 text-lg mb-1">DEC</h4>
+              <p class="text-xs text-gray-500">DEC Components</p>
+            </div>
+          </div>
+          <div onclick="selectCategory('movement')" class="bg-white border-2 border-gray-200 hover:border-black p-6 rounded-2xl shadow-xs cursor-pointer transition-all hover:shadow-lg flex flex-col justify-between group h-40">
+            <div class="flex justify-between items-start">
+              <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-black">Category</span>
+              <span class="w-3 h-3 rounded-full bg-emerald-500"></span>
+            </div>
+            <div>
+              <h4 class="font-black text-gray-900 text-lg mb-1">Movement</h4>
+              <p class="text-xs text-gray-500">Movement Production</p>
+            </div>
+          </div>
+          <div onclick="selectCategory('pcbcoil')" class="bg-white border-2 border-gray-200 hover:border-black p-6 rounded-2xl shadow-xs cursor-pointer transition-all hover:shadow-lg flex flex-col justify-between group h-40">
+            <div class="flex justify-between items-start">
+              <span class="text-[10px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-black">Category</span>
+              <span class="w-3 h-3 rounded-full bg-rose-500"></span>
+            </div>
+            <div>
+              <h4 class="font-black text-gray-900 text-lg mb-1">PCB&COIL</h4>
+              <p class="text-xs text-gray-500">Electronics & Coils</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Dashboard View with 3 Clickable Metric Cards -->
+      <div id="section-table" class="space-y-6 hidden">
+        
+        <div class="flex items-center justify-between">
+          <button onclick="backToLanding()" class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs flex items-center gap-1.5">
+            <span>←</span> Back to Categories
+          </button>
+        </div>
+
+        <!-- 3 Clickable Metric Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div onclick="filterStatus('All')" id="card-total" class="bg-white border-2 border-gray-200 hover:border-black p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-gray-900 transition-colors">Total Models</span>
+              <h3 id="stat-total" class="text-2xl font-black text-gray-900">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-600 group-hover:bg-black group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+            </div>
+          </div>
+
+          <div onclick="filterStatus('Ready')" id="card-ready" class="bg-white border-2 border-emerald-100 hover:border-emerald-500 p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Ready to Produce</span>
+              <h3 id="stat-ready" class="text-2xl font-black text-emerald-600">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+          </div>
+
+          <div onclick="filterStatus('Shortage')" id="card-shortage" class="bg-white border-2 border-red-100 hover:border-red-500 p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-red-600 uppercase tracking-wider">Shortage Blockers</span>
+              <h3 id="stat-shortage" class="text-2xl font-black text-red-600">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Table View -->
+        <div class="bg-white p-6 rounded-2xl border border-gray-200 shadow-xs space-y-4">
+          <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <h3 id="table-main-title" class="text-sm font-bold text-gray-900">Model Production Status & Schedule</h3>
+            <div class="flex items-center gap-3">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-bold text-gray-400 uppercase tracking-wider">Part Filter:</span>
+                <div class="relative">
+                  <select id="dashboard-part-filter" onchange="applyFilterAndSearch()" class="appearance-none bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 text-xs font-bold rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-2 focus:ring-black transition-all cursor-pointer">
+                    <option value="ALL">All Types</option>
+                  </select>
+                  <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                  </div>
+                </div>
+              </div>
+              <span id="table-count-label" class="text-xs font-semibold text-gray-400 bg-gray-50 px-3 py-1 rounded-full border border-gray-100">Showing active models</span>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-gray-100 text-[11px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50/50">
+                  <th class="py-3.5 px-4 rounded-l-xl">Model Name</th>
+                  <th class="py-3.5 px-4 text-center">Warehouse</th>
+                  <th class="py-3.5 px-4 text-center">Manufacture Date</th>
+                  <th class="py-3.5 px-4 text-center">Shop No.</th>
+                  <th class="py-3.5 px-4">Status</th>
+                  <th class="py-3.5 px-4 rounded-r-xl">Action</th>
+                </tr>
+              </thead>
+              <tbody id="table-body" class="divide-y divide-gray-50 text-sm"></tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Shortage Inline Details View -->
+      <div id="section-shortage-inline" class="hidden space-y-6">
+        
+        <div class="flex items-center justify-between">
+          <button onclick="backToLanding()" class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs flex items-center gap-1.5">
+            <span>←</span> Back to Categories
+          </button>
+        </div>
+
+        <!-- 3 Clickable Metric Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div onclick="filterStatus('All')" id="card-shortage-total" class="bg-white border-2 border-gray-200 hover:border-black p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-gray-400 uppercase tracking-wider group-hover:text-gray-900 transition-colors">Total Models</span>
+              <h3 id="stat-shortage-total" class="text-2xl font-black text-gray-900">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-600 group-hover:bg-black group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+            </div>
+          </div>
+
+          <div onclick="filterStatus('Ready')" id="card-shortage-ready" class="bg-white border-2 border-emerald-100 hover:border-emerald-500 p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-emerald-600 uppercase tracking-wider">Ready to Produce</span>
+              <h3 id="stat-shortage-ready" class="text-2xl font-black text-emerald-600">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            </div>
+          </div>
+
+          <div onclick="filterStatus('Shortage')" id="card-shortage-shortage" class="bg-white border-2 border-red-100 hover:border-red-500 p-5 rounded-2xl shadow-xs flex items-center justify-between cursor-pointer transition-all hover:shadow-md group ring-2 ring-red-500">
+            <div class="space-y-1">
+              <span class="text-[11px] font-bold text-red-600 uppercase tracking-wider">Shortage Blockers</span>
+              <h3 id="stat-shortage-shortage" class="text-2xl font-black text-red-600">0</h3>
+            </div>
+            <div class="w-10 h-10 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-red-600 group-hover:bg-red-600 group-hover:text-white transition-all">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex justify-between items-center bg-red-50/50 border border-red-200 p-5 rounded-2xl">
+          <div>
+            <h3 class="text-sm font-bold text-red-700">Shortage Blockers - Inline Details</h3>
+            <p class="text-xs text-red-500 mt-0.5">Showing models with component shortage blockers for quick inspection.</p>
+          </div>
+          <!-- กรอบแสดงจำนวนพาร์ทที่ขาด (Shortage Parts) ทำงานตามฟิลเตอร์วันที่และประเภทเรียบร้อย -->
+          <span id="shortage-count-badge" class="px-3 py-1.5 rounded-xl bg-red-600 text-white text-xs font-bold shadow-xs"></span>
+        </div>
+        <div id="shortage-inline-container" class="space-y-4"></div>
+      </div>
+    </div>
+
+    <div id="tree-view" class="hidden p-8 space-y-6 flex-1">
+      <div class="flex flex-col md:flex-row items-start md:items-center justify-between border-b border-gray-200 pb-4 gap-4">
+        <div class="flex items-center gap-4">
+          <button onclick="showDashboard()" class="bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-all">
+            ← Back to Dashboard
+          </button>
+          <h2 id="tree-title" class="text-base font-bold text-gray-900">BOM Hierarchy Tree</h2>
+        </div>
+        
+        <div class="flex items-center gap-3">
+          <span class="text-xs font-bold text-gray-400 uppercase tracking-wider">Filter Type:</span>
+          <div class="relative">
+            <select id="tree-part-filter" onchange="filterBOMTree()" class="appearance-none bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-800 text-xs font-bold rounded-lg px-3 py-1.5 pr-8 focus:outline-none focus:ring-2 focus:ring-black transition-all cursor-pointer">
+              <option value="ALL">All Types</option>
+            </select>
+            <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-gray-500">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white p-6 rounded-2xl border border-gray-200 shadow-xs space-y-4">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse">
+            <thead>
+              <tr class="border-b border-gray-100 text-[11px] font-bold text-gray-400 uppercase tracking-wider bg-gray-50/50">
+                <th class="py-3.5 px-4 font-semibold">Part Code & Description</th>
+                <th class="py-3.5 px-4 font-semibold text-center w-28">Usage</th>
+                <th class="py-3.5 px-4 font-semibold w-36">Requirement</th>
+                <th class="py-3.5 px-4 font-semibold w-36">On-Hand</th>
+                <th class="py-3.5 px-4 font-semibold w-48 text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody id="tree-table-body" class="divide-y divide-gray-50 text-sm"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const rawData = REPLACE_JSON_DATA;
+    const bomDetails = REPLACE_JSON_BOM;
+    let currentFilter = 'All';
+    let currentView = '';
+    let currentActiveModel = '';
+    let isSidebarCollapsed = false;
+
+    function initDashboardPartFilter() {
+      const filterSelect = document.getElementById('dashboard-part-filter');
+      let suffixes = new Set();
+      
+      Object.values(bomDetails).forEach(comps => {
+        comps.forEach(c => {
+          let suf = getPartTypeSuffix(c.Description);
+          if (suf) suffixes.add(suf);
+        });
+      });
+
+      filterSelect.innerHTML = '<option value="ALL">All Types</option>';
+      Array.from(suffixes).sort().forEach(suf => {
+        let opt = document.createElement('option');
+        opt.value = suf;
+        opt.innerText = suf;
+        filterSelect.appendChild(opt);
+      });
+    }
+
+    function toggleSidebar() {
+      isSidebarCollapsed = !isSidebarCollapsed;
+      const sidebar = document.getElementById('sidebar');
+      const sidebarTexts = document.querySelectorAll('.sidebar-text');
+      const collapseIcon = document.getElementById('collapse-icon');
+
+      if (isSidebarCollapsed) {
+        sidebar.style.width = '80px';
+        sidebar.style.minWidth = '80px';
+        sidebarTexts.forEach(el => el.style.display = 'none');
+        collapseIcon.innerText = '»';
+      } else {
+        sidebar.style.width = '256px';
+        sidebar.style.minWidth = '256px';
+        sidebarTexts.forEach(el => el.style.display = '');
+        collapseIcon.innerText = '«';
+      }
+    }
+
+    function selectCategory(view) {
+      document.getElementById('section-landing').classList.add('hidden');
+      document.getElementById('section-table').classList.remove('hidden');
+      switchView(view);
+    }
+
+    function backToLanding() {
+      currentView = '';
+      document.getElementById('section-table').classList.add('hidden');
+      document.getElementById('section-shortage-inline').classList.add('hidden');
+      document.getElementById('section-landing').classList.remove('hidden');
+      
+      ['asy', 'clock', 'dec', 'movement', 'pcbcoil'].forEach(v => {
+        const btn = document.getElementById('tab-' + v);
+        const indicator = btn ? btn.querySelector('span') : null;
+        if (btn) {
+          btn.className = 'relative px-3.5 py-2 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer';
+          if (indicator) indicator.classList.add('hidden');
+        }
+      });
+    }
+
+    function switchView(view) {
+      currentView = view;
+      document.getElementById('section-landing').classList.add('hidden');
+
+      if (currentFilter === 'Shortage') {
+        document.getElementById('section-table').classList.add('hidden');
+        document.getElementById('section-shortage-inline').classList.remove('hidden');
+      } else {
+        document.getElementById('section-shortage-inline').classList.add('hidden');
+        document.getElementById('section-table').classList.remove('hidden');
+      }
+
+      ['asy', 'clock', 'dec', 'movement', 'pcbcoil'].forEach(v => {
+        const btn = document.getElementById('tab-' + v);
+        const indicator = btn ? btn.querySelector('span') : null;
+        if (btn) {
+          if (v === view) {
+            btn.className = 'relative px-3.5 py-2 rounded-lg text-xs font-bold bg-white text-gray-900 shadow-xs transition-all cursor-pointer';
+            if (indicator) indicator.classList.remove('hidden');
+          } else {
+            btn.className = 'relative px-3.5 py-2 rounded-lg text-xs font-semibold text-gray-500 hover:text-gray-900 transition-all cursor-pointer';
+            if (indicator) indicator.classList.add('hidden');
+          }
+        }
+      });
+
+      applyFilterAndSearch();
+    }
+
+    function renderAll(data, baseFilteredData) {
+      updateSummaryCards(baseFilteredData);
+      if (currentFilter === 'Shortage') {
+        renderShortageInline(data);
+      } else {
+        renderTable(data);
+      }
+    }
+
+    function updateSummaryCards(baseFilteredData) {
+      let total = baseFilteredData.length;
+      let ready = baseFilteredData.filter(i => i.Status === 'Ready').length;
+      let shortage = baseFilteredData.filter(i => i.Status === 'Shortage').length;
+
+      document.getElementById('stat-total').innerText = total;
+      document.getElementById('stat-ready').innerText = ready;
+      document.getElementById('stat-shortage').innerText = shortage;
+
+      document.getElementById('stat-shortage-total').innerText = total;
+      document.getElementById('stat-shortage-ready').innerText = ready;
+      document.getElementById('stat-shortage-shortage').innerText = shortage;
+    }
+
+    function renderTable(data) {
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+      document.getElementById('table-count-label').innerText = 'Showing ' + data.length + ' active models';
+
+      if (data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-gray-400">No active or upcoming models found</td></tr>';
+        return;
+      }
+
+      data.forEach((row) => {
+        const badge = row.Status === 'Shortage'
+          ? '<span class="px-3 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-600 border border-red-200">Shortage</span>'
+          : '<span class="px-3 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-200">Ready</span>';
+
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-50/60 transition-colors';
+        tr.innerHTML = `
+          <td class="py-3.5 px-4 font-bold text-gray-900">${row.Model}</td>
+          <td class="py-3.5 px-4 text-center text-gray-600 font-mono text-xs font-medium">${row.Warehouse || "-"}</td>
+          <td class="py-3.5 px-4 text-center text-gray-600 text-xs font-medium">${row.ManufactureDate || "-"}</td>
+          <td class="py-3.5 px-4 text-center text-gray-600 font-mono text-xs font-medium">${row.ShopNo || "-"}</td>
+          <td class="py-3.5 px-4">${badge}</td>
+          <td class="py-3.5 px-4"></td>
+        `;
+        
+        const btn = document.createElement('button');
+        btn.className = 'inline-flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50/80 hover:bg-blue-100 px-3.5 py-1.5 rounded-xl transition-all cursor-pointer border border-blue-200';
+        btn.innerHTML = 'View BOM Tree ↗';
+        btn.onclick = () => showBOMTree(row.Model);
+        tr.cells[5].appendChild(btn);
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderShortageInline(data) {
+      const container = document.getElementById('shortage-inline-container');
+      container.innerHTML = '';
+
+      const selectedPartType = document.getElementById('dashboard-part-filter').value;
+      let totalShortagePartsCount = 0;
+
+      data.forEach(row => {
+        const comps = bomDetails[row.Model] || [];
+        const shortageComps = comps.filter(c => {
+          if (c.Status !== 'Shortage') return false;
+          if (selectedPartType && selectedPartType !== 'ALL') {
+            return getPartTypeSuffix(c.Description) === selectedPartType;
+          }
+          return true;
+        });
+        totalShortagePartsCount += shortageComps.length;
+      });
+
+      document.getElementById('shortage-count-badge').innerText = totalShortagePartsCount + ' Shortage Parts';
+
+      if (data.length === 0) {
+        container.innerHTML = '<div class="bg-white p-8 rounded-2xl text-center text-gray-400 border border-gray-200">Excellent! No shortage blockers found in this category.</div>';
+        return;
+      }
+
+      data.forEach(row => {
+        const comps = bomDetails[row.Model] || [];
+        const shortageComps = comps.filter(c => {
+          if (c.Status !== 'Shortage') return false;
+          if (selectedPartType && selectedPartType !== 'ALL') {
+            return getPartTypeSuffix(c.Description) === selectedPartType;
+          }
+          return true;
+        });
+
+        if (shortageComps.length === 0 && selectedPartType !== 'ALL') return;
+
+        let compsHtml = '';
+        if (shortageComps.length === 0) {
+          compsHtml = '<p class="text-xs text-gray-400 italic p-3">No direct shortage components found matching filter.</p>';
+        } else {
+          compsHtml = `
+            <div class="overflow-x-auto mt-2">
+              <table class="w-full text-left text-xs bg-white rounded-xl border border-red-100">
+                <thead class="bg-red-50/40 text-red-700 uppercase tracking-wider">
+                  <tr>
+                    <th class="p-3">Level</th>
+                    <th class="p-3">Part Code & Description</th>
+                    <th class="p-3 text-center">Requirement</th>
+                    <th class="p-3 text-center">On-Hand</th>
+                    <th class="p-3 text-center">Shortage Qty</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-red-50">
+          `;
+          shortageComps.forEach(sc => {
+            let diff = Math.round((sc.OnHandBeforeIssue - sc.Requirement) * 100) / 100;
+            compsHtml += `
+              <tr class="hover:bg-red-50/20">
+                <td class="p-3 font-mono font-bold text-gray-600">${sc.Level}</td>
+                <td class="p-3 font-semibold text-gray-900"><span class="font-mono text-blue-600 mr-2">${sc.Part}</span> ${sc.Description}</td>
+                <td class="p-3 text-center text-gray-700">${Math.round(sc.Requirement * 100) / 100}</td>
+                <td class="p-3 text-center text-gray-700">${Math.round(sc.OnHandBeforeIssue * 100) / 100}</td>
+                <td class="p-3 text-center font-bold text-red-600">${diff.toLocaleString()}</td>
+              </tr>
+            `;
+          });
+          compsHtml += `</tbody></table></div>`;
+        }
+
+        const card = document.createElement('div');
+        card.className = 'bg-white border border-red-200 rounded-2xl p-6 shadow-xs space-y-3';
+        card.innerHTML = `
+          <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-gray-100 pb-3">
+            <div>
+              <div class="flex items-center gap-2">
+                <h4 class="font-bold text-gray-900 text-base">${row.Model}</h4>
+                <span class="px-2.5 py-1 rounded-lg text-[10px] font-black bg-red-100 text-red-700 tracking-wider uppercase">SHORTAGE BLOCKER</span>
+              </div>
+              <div class="flex items-center gap-4 text-xs text-gray-500 mt-1.5 font-mono">
+                <span>Warehouse: <strong class="text-gray-700">${row.Warehouse || "-"}</strong></span>
+                <span>Mfg Date: <strong class="text-gray-700">${row.ManufactureDate || "-"}</strong></span>
+                <span>Shop No: <strong class="text-gray-700">${row.ShopNo || "-"}</strong></span>
+              </div>
+            </div>
+          </div>
+          <div>
+            <span class="text-xs font-bold text-red-600 uppercase tracking-wider">Shortage Components:</span>
+            ${compsHtml}
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function filterStatus(status) {
+      currentFilter = status;
+      ['all', 'shortage', 'ready'].forEach(s => {
+        const btn = document.getElementById('sidebar-' + s);
+        const ind = document.getElementById('indicator-' + s);
+        if (btn) {
+          btn.className = 'w-full relative flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-medium text-gray-600 hover:bg-gray-50 transition-all cursor-pointer';
+        }
+        if (ind) ind.classList.add('hidden');
+      });
+
+      const activeBtn = document.getElementById('sidebar-' + status.toLowerCase());
+      const activeInd = document.getElementById('indicator-' + status.toLowerCase());
+      if (activeBtn) {
+        activeBtn.className = 'w-full relative flex items-center gap-3 px-4 py-2.5 rounded-xl text-xs font-bold bg-gray-50 text-gray-900 transition-all cursor-pointer';
+      }
+      if (activeInd) activeInd.classList.remove('hidden');
+
+      ['total', 'ready', 'shortage'].forEach(cardType => {
+        const cardEl1 = document.getElementById('card-' + cardType);
+        const cardEl2 = document.getElementById('card-shortage-' + cardType);
+        if (cardEl1) {
+          if (cardType === status.toLowerCase()) cardEl1.classList.add('ring-2', 'ring-black');
+          else cardEl1.classList.remove('ring-2', 'ring-black');
+        }
+        if (cardEl2) {
+          if (cardType === status.toLowerCase()) {
+            if (cardType === 'shortage') cardEl2.classList.add('ring-2', 'ring-red-500');
+            else if (cardType === 'ready') cardEl2.classList.add('ring-2', 'ring-emerald-500');
+            else cardEl2.classList.add('ring-2', 'ring-black');
+          } else {
+            cardEl2.classList.remove('ring-2', 'ring-black', 'ring-red-500', 'ring-emerald-500');
+          }
+        }
+      });
+
+      if (currentView) {
+        if (status === 'Shortage') {
+          document.getElementById('section-table').classList.add('hidden');
+          document.getElementById('section-shortage-inline').classList.remove('hidden');
+        } else {
+          document.getElementById('section-shortage-inline').classList.add('hidden');
+          document.getElementById('section-table').classList.remove('hidden');
+        }
+        applyFilterAndSearch();
+      }
+    }
+
+    function resetDateFilter() {
+      document.getElementById('date-filter-input').value = '';
+      applyFilterAndSearch();
+    }
+
+    function applyFilterAndSearch() {
+      if (!currentView) return;
+      const query = document.getElementById('search-input').value.toLowerCase();
+      const selectedDate = document.getElementById('date-filter-input').value;
+      const selectedPartType = document.getElementById('dashboard-part-filter').value;
+      let baseFiltered = rawData;
+
+      if (currentView) {
+        baseFiltered = baseFiltered.filter(i => i.Category === currentView);
+      }
+
+      if (selectedDate) {
+        baseFiltered = baseFiltered.filter(i => i.ManufactureDate === selectedDate);
+      }
+
+      if (selectedPartType && selectedPartType !== 'ALL') {
+        baseFiltered = baseFiltered.filter(i => {
+          const comps = bomDetails[i.Model] || [];
+          return comps.some(c => getPartTypeSuffix(c.Description) === selectedPartType);
+        });
+      }
+
+      if (query) {
+        baseFiltered = baseFiltered.filter(i => {
+          const modelMatch = i.Model.toLowerCase().includes(query);
+          const shopNoMatch = String(i.ShopNo || '').toLowerCase().includes(query);
+          return modelMatch || shopNoMatch;
+        });
+      }
+
+      let statusFiltered = baseFiltered;
+      if (currentFilter === 'Shortage') {
+        statusFiltered = baseFiltered.filter(i => i.Status === 'Shortage');
+      } else if (currentFilter === 'Ready') {
+        statusFiltered = baseFiltered.filter(i => i.Status === 'Ready');
+      }
+
+      renderAll(statusFiltered, baseFiltered);
+    }
+
+    document.getElementById('search-input').addEventListener('input', applyFilterAndSearch);
+
+    function getPartTypeSuffix(desc) {
+      if (!desc) return '';
+      let cleanDesc = desc.trim();
+      if (cleanDesc.toUpperCase().endsWith('NOTEST')) {
+        return cleanDesc.slice(-6).toUpperCase();
+      }
+      if (cleanDesc.length >= 3) {
+        return cleanDesc.slice(-3).toUpperCase();
+      }
+      return cleanDesc.toUpperCase();
+    }
+
+    function showBOMTree(modelName) {
+      currentActiveModel = modelName;
+      document.getElementById('dashboard-view').classList.add('hidden');
+      document.getElementById('tree-view').classList.remove('hidden');
+      document.getElementById('tree-title').innerText = 'BOM Hierarchy Tree: ' + modelName;
+
+      const comps = bomDetails[modelName] || [];
+      const filterSelect = document.getElementById('tree-part-filter');
+      filterSelect.innerHTML = '<option value="ALL">All Types</option>';
+
+      let suffixes = new Set();
+      comps.forEach(c => {
+        let suf = getPartTypeSuffix(c.Description);
+        if (suf) suffixes.add(suf);
+      });
+
+      Array.from(suffixes).sort().forEach(suf => {
+        let opt = document.createElement('option');
+        opt.value = suf;
+        opt.innerText = suf;
+        filterSelect.appendChild(opt);
+      });
+      filterSelect.value = 'ALL';
+
+      renderBOMTreeTable(comps);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function filterBOMTree() {
+      const selectedType = document.getElementById('tree-part-filter').value;
+      const comps = bomDetails[currentActiveModel] || [];
+
+      if (selectedType === 'ALL') {
+        renderBOMTreeTable(comps);
+      } else {
+        const filteredComps = comps.filter(c => getPartTypeSuffix(c.Description) === selectedType);
+        renderBOMTreeTable(filteredComps);
+      }
+    }
+
+    function renderBOMTreeTable(comps) {
+      const tbody = document.getElementById('tree-table-body');
+      tbody.innerHTML = '';
+
+      if (comps.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="py-8 text-center text-gray-400">No components found matching this filter</td></tr>';
+        return;
+      }
+
+      comps.forEach((c, index) => {
+        c.index = index;
+        c.children = [];
+      });
+
+      let stack = [];
+      let rootItems = [];
+      comps.forEach(c => {
+        while (stack.length > 0 && stack[stack.length - 1].Level_Num >= c.Level_Num) {
+          stack.pop();
+        }
+        if (stack.length === 0) {
+          rootItems.push(c);
+        } else {
+          stack[stack.length - 1].children.push(c);
+        }
+        stack.push(c);
+      });
+
+      function renderRows(item, depth, parentPath) {
+        let levelNum = item.Level_Num;
+        let hasChildren = item.children && item.children.length > 0;
+        let rowId = 'row-' + item.index;
+        let pathKey = parentPath ? parentPath + '-' + item.index : 'root-' + item.index;
+
+        let statusBadge = '';
+        if (item.Status !== "") {
+          if (item.Status === 'Shortage') {
+            let diff = Math.round((item.OnHandBeforeIssue - item.Requirement) * 100) / 100;
+            statusBadge = `<span class="px-3 py-1 rounded-lg text-xs font-bold bg-red-50 text-red-600 border border-red-300">SHORTAGE (${diff.toLocaleString()})</span>`;
+          } else {
+            if (item.OnHandBeforeIssue > item.Requirement) {
+              let rem = Math.round((item.OnHandBeforeIssue - item.Requirement) * 100) / 100;
+              statusBadge = `<span class="px-3 py-1 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-200">REMAINING: +${rem.toLocaleString()}</span>`;
+            } else {
+              statusBadge = '<span class="px-3 py-1 rounded-lg text-xs font-bold bg-gray-100 text-gray-600 border border-gray-200">PARENT IN STOCK</span>';
+            }
+          }
+        }
+
+        let minLevel = item.isNotest ? 1 : 0;
+        let indentPx = (levelNum - minLevel) * 28;
+        if (indentPx < 0) indentPx = 0;
+
+        let levelBadgeClass = levelNum === minLevel ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-gray-100 text-gray-600 border-gray-300';
+        let toggleIcon = hasChildren ? `<span id="icon-${rowId}" class="text-gray-400 text-xs transition-transform transform rotate-90 cursor-pointer mr-2">▼</span>` : '<span class="w-4 inline-block mr-2"></span>';
+
+        let tr = document.createElement('tr');
+        tr.id = rowId;
+        tr.dataset.path = pathKey;
+        tr.className = `hover:bg-gray-50/80 transition-colors text-sm ${levelNum === minLevel ? 'bg-gray-50/60 font-bold' : 'border-t border-gray-100'}`;
+        
+        tr.innerHTML = `
+          <td class="py-3.5 px-4">
+            <div class="flex items-center" style="padding-left: ${indentPx}px;">
+              ${toggleIcon}
+              <span class="px-2 py-0.5 rounded text-xs font-mono font-bold border ${levelBadgeClass} mr-2">L${levelNum}</span>
+              <span class="font-mono text-xs font-bold text-blue-600 mr-2">${item.Part}</span>
+              <span class="text-gray-800">${item.Description}</span>
+            </div>
+          </td>
+          <td class="py-3.5 px-4 text-center font-semibold text-gray-700">${item.Usage}</td>
+          <td class="py-3.5 px-4 font-semibold text-gray-700">${Math.round(item.Requirement * 100) / 100} EA</td>
+          <td class="py-3.5 px-4 font-semibold text-gray-700">${Math.round(item.OnHandBeforeIssue * 100) / 100}</td>
+          <td class="py-3.5 px-4 text-center">${statusBadge}</td>
+        `;
+        tbody.appendChild(tr);
+
+        let childTrs = [];
+        if (hasChildren) {
+          item.children.forEach(child => {
+            childTrs.push(...renderRows(child, depth + 1, pathKey));
+          });
+
+          let isExpanded = true;
+          let toggleHandler = (e) => {
+            isExpanded = !isExpanded;
+            let icon = document.getElementById('icon-' + rowId);
+            if (icon) {
+              if (isExpanded) {
+                icon.classList.add('rotate-90');
+                childTrs.forEach(t => t.style.display = '');
+              } else {
+                icon.classList.remove('rotate-90');
+                childTrs.forEach(t => t.style.display = 'none');
+              }
+            }
+          };
+          tr.onclick = toggleHandler;
+        }
+
+        return [tr, ...childTrs];
+      }
+
+      rootItems.forEach(root => {
+        renderRows(root, 0, '');
+      });
+    }
+
+    function showDashboard() {
+      document.getElementById('tree-view').classList.add('hidden');
+      document.getElementById('dashboard-view').classList.remove('hidden');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    initDashboardPartFilter();
+  </script>
+</body>
+</html>
+"""
+
+    html_content = html_template.replace("REPLACE_JSON_DATA", json_data).replace("REPLACE_JSON_BOM", json_bom)
+
+    with open('index.html', 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print("Dashboard generated successfully with full date filter integration for shortage part counts!")
+
+if __name__ == '__main__':
+    generate_full_dashboard()
